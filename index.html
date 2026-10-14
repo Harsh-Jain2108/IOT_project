@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud IoT Air Quality Station & Dataset Logger</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      margin: 0;
+      padding: 25px;
+      text-align: center;
+    }
+    h1 { color: #38bdf8; margin-bottom: 5px; }
+    .sub { color: #94a3b8; font-size: 14px; margin-bottom: 25px; }
+    .cards {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 18px;
+      max-width: 900px;
+      margin: 0 auto 30px auto;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 20px;
+      width: 220px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+    }
+    .label { color: #94a3b8; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+    .val { font-size: 38px; font-weight: bold; margin: 10px 0; color: #f1f5f9; }
+    .badge {
+      display: inline-block;
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: bold;
+      background: #22c55e;
+      color: #052e16;
+    }
+    .btn {
+      background: #0284c7;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-bottom: 20px;
+      transition: 0.2s;
+    }
+    .btn:hover { background: #0369a1; }
+    table {
+      width: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+      border-collapse: collapse;
+      background: #1e293b;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #334155;
+      font-size: 14px;
+    }
+    th { background: #0f172a; color: #38bdf8; text-transform: uppercase; font-size: 12px; }
+    tr:hover { background: #26354d; }
+  </style>
+</head>
+<body>
+
+  <h1>Cloud IoT Air Quality & Weather Monitor</h1>
+  <div class="sub">Last Cloud Sync: <span id="lastSync">Connecting...</span></div>
+
+  <!-- Live Telemetry Cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="label">Temperature</div>
+      <div class="val"><span id="temp">--</span> °C</div>
+      <div style="color:#64748b; font-size:13px;">DHT22 Sensor</div>
+    </div>
+    <div class="card">
+      <div class="label">Humidity</div>
+      <div class="val"><span id="hum">--</span> %</div>
+      <div style="color:#64748b; font-size:13px;">Relative Humidity</div>
+    </div>
+    <div class="card">
+      <div class="label">Calibrated AQI</div>
+      <div class="val"><span id="aqi">--</span></div>
+      <div id="statusBadge" class="badge">Waiting...</div>
+      <div style="color:#64748b; font-size:12px; margin-top:8px;">Raw ADC: <span id="raw">--</span></div>
+    </div>
+  </div>
+
+  <!-- Dataset Controls & Export -->
+  <button class="btn" onclick="downloadCSV()">⬇ Download Full Dataset (.CSV for ML / Excel)</button>
+  <span style="margin-left: 12px; color:#94a3b8; font-size:14px;">Total Rows Collected: <strong id="rowCount">0</strong></span>
+
+  <!-- Live Cloud Dataset Table -->
+  <table>
+    <thead>
+      <tr>
+        <th>Timestamp (IST)</th>
+        <th>Temp (°C)</th>
+        <th>Humidity (%)</th>
+        <th>MQ-135 Raw</th>
+        <th>Calibrated AQI</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody">
+      <tr><td colspan="6">Loading cloud dataset...</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    // =========================================================
+    // PASTE YOUR EXACT FIREBASE URL BELOW (No trailing slash)
+    // =========================================================
+    const FIREBASE_URL = "https://iot-aqi-c4c0f-default-rtdb.firebaseio.com";
+
+    let globalDataset = [];
+
+    async function fetchCloudData() {
+      try {
+        // 1. Fetch Latest Live Reading
+        const liveRes = await fetch(`${FIREBASE_URL}/live.json`);
+        const liveData = await liveRes.json();
+
+        if (liveData) {
+          document.getElementById('temp').innerText     = liveData.temperature.toFixed(1);
+          document.getElementById('hum').innerText      = liveData.humidity.toFixed(1);
+          document.getElementById('aqi').innerText      = liveData.aqi;
+          document.getElementById('raw').innerText      = liveData.raw_adc;
+          document.getElementById('lastSync').innerText = liveData.timestamp;
+
+          const badge = document.getElementById('statusBadge');
+          badge.innerText = liveData.status;
+          if (liveData.aqi <= 100) {
+            badge.style.background = '#22c55e'; badge.style.color = '#052e16';
+          } else if (liveData.aqi <= 200) {
+            badge.style.background = '#facc15'; badge.style.color = '#422006';
+          } else {
+            badge.style.background = '#ef4444'; badge.style.color = '#ffffff';
+          }
+        }
+
+        // 2. Fetch Historical Dataset Log
+        const logRes = await fetch(`${FIREBASE_URL}/dataset.json`);
+        const logData = await logRes.json();
+
+        if (logData) {
+          globalDataset = Object.values(logData).reverse(); // Newest first
+          document.getElementById('rowCount').innerText = globalDataset.length;
+
+          // Display latest 15 rows in the live table
+          const tbody = document.getElementById('tableBody');
+          tbody.innerHTML = "";
+          globalDataset.slice(0, 15).forEach(row => {
+            tbody.innerHTML += `
+              <tr>
+                <td>${row.timestamp}</td>
+                <td>${row.temperature.toFixed(1)}</td>
+                <td>${row.humidity.toFixed(1)}</td>
+                <td>${row.raw_adc}</td>
+                <td><strong>${row.aqi}</strong></td>
+                <td>${row.status}</td>
+              </tr>`;
+          });
+        }
+      } catch (err) {
+        console.error("Cloud fetch error:", err);
+      }
+    }
+
+    // Export full collected dataset to a clean .CSV file for Python/Pandas/Excel
+    function downloadCSV() {
+      if (globalDataset.length === 0) {
+        alert("No dataset rows found yet!");
+        return;
+      }
+      let csv = "Timestamp,Temperature_C,Humidity_Pct,MQ135_Raw_ADC,Calibrated_AQI,Status\n";
+      // Export in chronological order (oldest to newest)
+      [...globalDataset].reverse().forEach(r => {
+        csv += `"${r.timestamp}",${r.temperature},${r.humidity},${r.raw_adc},${r.aqi},"${r.status}"\n`;
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `air_quality_dataset_${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+    }
+
+    fetchCloudData();
+    setInterval(fetchCloudData, 5000); // Sync every 5 seconds
+  </script>
+</body>
+</html>
